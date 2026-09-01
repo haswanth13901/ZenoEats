@@ -15,9 +15,13 @@ export default async function AdminOverviewPage() {
     await Promise.all([
       supabase.from("menu_items").select("*", { count: "exact", head: true }),
       supabase.from("places").select("*", { count: "exact", head: true }),
+      // Only paid orders are real work. An order row is created before the
+      // customer pays, so abandoned checkouts would otherwise sit in this
+      // count as "open" forever.
       supabase
         .from("orders")
         .select("*", { count: "exact", head: true })
+        .eq("paid", true)
         .in("status", ["placed", "preparing", "ready", "out_for_delivery"]),
     ]);
 
