@@ -86,11 +86,31 @@ npm run dev
   | `checkout.session.async_payment_succeeded` | Same, for bank debits that settle later |
   | `checkout.session.expired` | Cancels the abandoned order (~24h after checkout) |
 
-  For local testing use the Stripe CLI — it forwards every event type, so no
-  subscription step is needed:
-  `stripe listen --forward-to localhost:3000/api/webhooks/stripe`
-  Note the CLI prints its own `whsec_`, different from the dashboard's. Use the
-  CLI's one in `.env.local` while testing locally.
+  **Locally you do not need a dashboard endpoint at all.** The Stripe CLI
+  forwards every event type, so none of the above applies until you deploy:
+
+  ```bash
+  # No `stripe login` needed — authenticate with the test key directly:
+  stripe listen --api-key "$STRIPE_SECRET_KEY"     --forward-to localhost:3000/api/webhooks/stripe
+  ```
+
+  It prints its own `whsec_...`, **different from the dashboard's**. That is the
+  one that goes in `.env.local` while developing — using the dashboard secret
+  with CLI forwarding is the usual reason signature verification fails.
+
+  Fire a test event from a second terminal:
+  ```bash
+  stripe trigger checkout.session.completed --api-key "$STRIPE_SECRET_KEY"
+  ```
+  Expect `[200]` in the listen output. The triggered fixture has no
+  `order_id` metadata, so the webhook correctly refuses it and records a
+  `missing_order_metadata` alert — visible at /admin/alerts. That is the
+  alerting path working, not a fault.
+
+  One gotcha: in `next dev` the first request to an uncompiled route can arrive
+  with an empty body while the route compiles, which surfaces as
+  "No webhook payload was provided". Hit the route once, or re-trigger after
+  it has compiled.
 - **Twilio** — trial mode only sends to verified numbers. For real US business
   SMS you must complete **A2P 10DLC** brand + campaign registration (allow several
   days). Start this early.
