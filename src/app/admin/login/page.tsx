@@ -17,21 +17,24 @@ export default function AdminLoginPage() {
     setError(null);
     setLoading(true);
 
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    const { data: signIn, error: signInError } =
+      await supabase.auth.signInWithPassword({ email, password });
 
-    if (signInError) {
+    if (signInError || !signIn.user) {
       setError("Those credentials didn't match. Check your email and password.");
       setLoading(false);
       return;
     }
 
+    // Filter by id explicitly. The profiles policy is
+    // `id = auth.uid() or is_admin()`, so an admin reading this table sees
+    // every row — without the filter `.single()` errors on the second profile
+    // and locks real admins out.
     const { data: profile } = await supabase
       .from("profiles")
       .select("role")
-      .single();
+      .eq("id", signIn.user.id)
+      .maybeSingle();
 
     if (profile?.role !== "admin") {
       await supabase.auth.signOut();

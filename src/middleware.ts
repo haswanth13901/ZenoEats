@@ -3,11 +3,19 @@ import { NextResponse, type NextRequest } from "next/server";
 
 type CookieToSet = { name: string; value: string; options: CookieOptions };
 
+/** Areas that require a signed-in user. Role checks happen in each layout. */
+const PROTECTED_PREFIXES = ["/admin", "/driver"];
+const LOGIN_PATH = "/admin/login";
+
 /**
- * On every request: refresh the Supabase session cookie, and guard the
- * admin area. Unauthenticated hits to /admin/* (except /admin/login) are
- * redirected to the login page. The role check (admin vs driver) happens
- * in the admin layout, which can query the profiles table.
+ * On every page request: refresh the Supabase session cookie, and guard the
+ * staff areas. Unauthenticated hits to /admin/* (except the login page) and
+ * /driver/* are redirected to login. Whether that user is an *admin* or a
+ * *driver* is decided in the respective layout, which can read `profiles`.
+ *
+ * API routes are excluded from the matcher: they authenticate themselves, and
+ * running an auth round-trip on the Stripe webhook only adds latency to the
+ * money path.
  */
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -38,12 +46,15 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const { pathname } = request.nextUrl;
-  const isAdminArea = pathname.startsWith("/admin");
-  const isLoginPage = pathname === "/admin/login";
+  const isProtected = PROTECTED_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+  );
+  const isLoginPage = pathname === LOGIN_PATH;
 
-  if (isAdminArea && !isLoginPage && !user) {
+  if (isProtected && !isLoginPage && !user) {
     const url = request.nextUrl.clone();
-    url.pathname = "/admin/login";
+    url.pathname = LOGIN_PATH;
+    url.search = "";
     return NextResponse.redirect(url);
   }
 
@@ -51,5 +62,7 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+  matcher: [
+    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+  ],
 };

@@ -1,12 +1,14 @@
-import { redirect } from "next/navigation";
-import { createServerSupabase } from "@/lib/supabase-server";
+import { getStaffUser } from "@/lib/auth";
 import SignOutButton from "@/components/SignOutButton";
+import NoAccess from "@/components/NoAccess";
 
 /**
- * Wraps all /admin routes. Middleware already redirects unauthenticated
- * users away from every admin page except /admin/login. So here:
+ * Wraps all /admin routes. Middleware already redirects unauthenticated users
+ * away from every admin page except /admin/login. So here:
  *  - No user  → render children bare (this is the login page).
- *  - User but not admin → bounce to login (they lack access).
+ *  - Signed in but not an admin → explain, and offer a way out. Bouncing them
+ *    back to /admin/login would loop through a login form they are already
+ *    past, which reads as a broken app rather than a permissions boundary.
  *  - Admin → render the full console chrome.
  */
 export default async function AdminLayout({
@@ -14,25 +16,23 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getStaffUser();
 
-  // Unauthenticated: the only reachable admin page is login. Render it
-  // without the console shell.
   if (!user) {
     return <>{children}</>;
   }
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role, full_name")
-    .eq("id", user.id)
-    .single();
-
-  if (profile?.role !== "admin") {
-    redirect("/admin/login");
+  if (user.role !== "admin") {
+    return (
+      <NoAccess
+        title="You don't have admin access"
+        body={
+          user.role === "driver"
+            ? "This account is a driver. Head to the driver view, or ask an owner for admin access."
+            : "This account hasn't been granted a role yet. Ask an owner to set you up."
+        }
+      />
+    );
   }
 
   return (
@@ -48,7 +48,7 @@ export default async function AdminLayout({
           </nav>
         </div>
         <div className="flex items-center gap-4 text-sm">
-          <span className="text-neutral-500">{profile?.full_name ?? "Admin"}</span>
+          <span className="text-neutral-500">{user.fullName ?? "Admin"}</span>
           <SignOutButton />
         </div>
       </header>
