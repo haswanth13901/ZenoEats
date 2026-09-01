@@ -10,7 +10,7 @@ Customers scan a QR code at a delivery location, browse the menu, pay via Stripe
 - **QR ordering** — each delivery place has a unique QR encoding its `place_id`; scanning opens the menu with the destination pre-set.
 - **Stripe Checkout** — hosted payment, webhook-driven order confirmation.
 - **SMS notifications** — Twilio sends the tracking link on successful payment.
-- **Live tracking** — order status (`placed → preparing → ready → out_for_delivery → delivered`) plus live driver location on a Google Map, streamed over Supabase Realtime.
+- **Live tracking** — order status (`placed → preparing → ready → out_for_delivery → delivered`) plus driver location on a Google Map. Staff views stream over Supabase Realtime; the customer tracking page is server-rendered, because `orders` deliberately has no public read policy (see `docs/AUDIT.md`, F3). Live customer updates need a per-order signed token or a security-definer RPC — not a blanket policy.
 - **Driver view** — drivers update status and stream GPS location.
 
 ## Tech Stack

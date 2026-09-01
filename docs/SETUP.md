@@ -14,11 +14,24 @@ cp .env.example .env.local   # fill in your keys
 
 Run the schema: open your Supabase project → SQL Editor → paste `supabase/schema.sql` → Run.
 
-Create your first admin: sign a user up (via Supabase Auth), then in the SQL editor:
+**Existing projects:** `schema.sql` is idempotent, so re-running the whole file
+is safe and applies everything. If you would rather review just the security
+changes, run `supabase/migrations/0001_harden_rls.sql` instead — it is the
+delta only (RLS policies, the definer helpers, the profile trigger), with
+verification queries at the bottom.
+
+Create your first admin: sign a user up (via Supabase Auth), then in the SQL
+editor promote them:
 ```sql
-insert into profiles (id, role, full_name)
-values ('<auth-user-uuid>', 'admin', 'Owner');
+update profiles set role = 'admin', full_name = 'Owner'
+where id = '<auth-user-uuid>';
 ```
+An `on_auth_user_created` trigger already inserts the `profiles` row for every
+new user (defaulting to `driver`), so this is an update, not an insert — an
+insert would conflict on the primary key.
+
+Unless you want self-serve driver signups, turn off public sign-ups in
+**Authentication → Providers → Email**. New accounts land as `driver`.
 
 Start the dev server:
 ```bash
@@ -50,7 +63,9 @@ Set `dev` as the **default** branch on GitHub, and protect `main` (require PR + 
 ## 5. CI/CD
 
 - `.github/workflows/ci.yml` — lint, type-check, build on every PR/push to `dev`/`main`.
-- `.github/workflows/deploy.yml` — deploys `dev` → staging, `main` → production.
+- `.github/workflows/deploy.yml` — **manual only** (Actions tab → Deploy → Run
+  workflow), targeting staging or production. Auto-deploy on push is
+  deliberately off while the app is still being built.
 
 Required GitHub secrets (Repo → Settings → Secrets → Actions):
 `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`.
