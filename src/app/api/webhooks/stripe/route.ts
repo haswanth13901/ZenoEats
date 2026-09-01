@@ -4,21 +4,37 @@ import { createAdminClient } from "@/lib/supabase-admin";
 import { sendTrackingSms } from "@/lib/twilio";
 import Stripe from "stripe";
 
+type AdminClient = ReturnType<typeof createAdminClient>;
+
 /**
- * Stripe webhook. On a *paid* checkout session, marks the order paid and texts
- * the customer their tracking link. The signature is verified against
- * STRIPE_WEBHOOK_SECRET before anything else happens.
+ * Stripe webhook.
+ *
+ *  - checkout.session.completed / async_payment_succeeded → mark the order
+ *    paid and text the customer their tracking link.
+ *  - checkout.session.expired → cancel the abandoned order.
+ *
+ * The signature is verified against STRIPE_WEBHOOK_SECRET before anything
+ * else happens.
  *
  * Status codes matter here: Stripe retries on any non-2xx. So a transient
  * failure (a database write we want retried) returns 500, while a permanent
  * one (an event we will never be able to process) returns 200 to stop the
  * retry loop — with a log line, not a silent drop.
+ *
+ * Every one of these event types must also be subscribed on the endpoint in
+ * the Stripe dashboard. Stripe does not send events you have not selected, so
+ * an unsubscribed type means this code never runs. See docs/SETUP.md.
  */
 
-const HANDLED: Stripe.Event.Type[] = [
+const PAID_EVENTS: Stripe.Event.Type[] = [
   "checkout.session.completed",
   // Async methods (bank debits) complete unpaid, then settle later.
   "checkout.session.async_payment_succeeded",
+];
+
+const HANDLED: Stripe.Event.Type[] = [
+  ...PAID_EVENTS,
+  "checkout.session.expired",
 ];
 
 export async function POST(req: NextRequest) {
@@ -59,6 +75,60 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ received: true });
   }
 
+  const supabase = createAdminClient();
+
+  if (event.type === "checkout.session.expired") {
+    return handleExpired(supabase, orderId, event.id);
+  }
+
+  return handlePaid(supabase, session, orderId, event.id);
+}
+
+/**
+ * The customer never finished paying and Stripe has expired the session
+ * (24 hours by default). The order row was created before checkout, so
+ * without this it would sit in the table as an unpaid 'placed' order forever.
+ */
+async function handleExpired(
+  supabase: AdminClient,
+  orderId: string,
+  eventId: string
+) {
+  // Conditional on still being unpaid and untouched: an order that somehow
+  // got paid, or that staff already moved on, must not be cancelled from
+  // under them.
+  const { data: cancelled, error } = await supabase
+    .from("orders")
+    .update({ status: "cancelled" })
+    .eq("id", orderId)
+    .eq("paid", false)
+    .eq("status", "placed")
+    .select("id");
+
+  if (error) {
+    console.error(`stripe webhook: could not cancel expired order ${orderId}`);
+    return NextResponse.json({ error: "Database error" }, { status: 500 });
+  }
+
+  if (!cancelled || cancelled.length === 0) {
+    // Already paid, already cancelled, or gone. Nothing to do — and nothing
+    // worth retrying.
+    return NextResponse.json({ received: true, noop: true });
+  }
+
+  console.info(
+    `stripe webhook: cancelled abandoned order ${orderId} (event ${eventId})`
+  );
+  return NextResponse.json({ received: true, cancelled: true });
+}
+
+/** The money arrived. Mark the order paid, then text the tracking link. */
+async function handlePaid(
+  supabase: AdminClient,
+  session: Stripe.Checkout.Session,
+  orderId: string,
+  eventId: string
+) {
   // Async payment methods fire checkout.session.completed while still unpaid.
   // Marking the order paid here would hand out food before the money settles.
   if (session.payment_status !== "paid") {
@@ -67,8 +137,6 @@ export async function POST(req: NextRequest) {
     );
     return NextResponse.json({ received: true });
   }
-
-  const supabase = createAdminClient();
 
   const { data: order, error: readError } = await supabase
     .from("orders")
@@ -83,7 +151,7 @@ export async function POST(req: NextRequest) {
 
   if (!order) {
     // Retrying will not conjure the order. Stop the retry loop, keep the log.
-    console.error(`stripe webhook: order ${orderId} not found for event ${event.id}`);
+    console.error(`stripe webhook: order ${orderId} not found for event ${eventId}`);
     return NextResponse.json({ received: true });
   }
 
@@ -99,8 +167,6 @@ export async function POST(req: NextRequest) {
 
   // Idempotency at the database level: the update only matches while the order
   // is still unpaid, so a replayed event updates zero rows and sends no SMS.
-  // Phase 4 adds a Redis event-id check in front of this as a cheap short-cut;
-  // this conditional write stays the source of truth.
   const { data: updated, error: updateError } = await supabase
     .from("orders")
     .update({ paid: true, status: "preparing" })

@@ -41,9 +41,24 @@ npm run dev
 ## 3. External service notes
 
 - **Stripe** — use test keys now. Add a webhook endpoint pointing to
-  `https://<your-domain>/api/webhooks/stripe` for the `checkout.session.completed`
-  event, and copy the signing secret into `STRIPE_WEBHOOK_SECRET`.
-  For local testing use the Stripe CLI: `stripe listen --forward-to localhost:3000/api/webhooks/stripe`.
+  `https://<your-domain>/api/webhooks/stripe` and copy the signing secret into
+  `STRIPE_WEBHOOK_SECRET`.
+
+  Subscribe the endpoint to **all three** of these events. Stripe does not send
+  event types you have not selected, so an unsubscribed type means that code
+  path never runs:
+
+  | Event | What it does |
+  |---|---|
+  | `checkout.session.completed` | Marks the order paid, sends the tracking SMS |
+  | `checkout.session.async_payment_succeeded` | Same, for bank debits that settle later |
+  | `checkout.session.expired` | Cancels the abandoned order (~24h after checkout) |
+
+  For local testing use the Stripe CLI — it forwards every event type, so no
+  subscription step is needed:
+  `stripe listen --forward-to localhost:3000/api/webhooks/stripe`
+  Note the CLI prints its own `whsec_`, different from the dashboard's. Use the
+  CLI's one in `.env.local` while testing locally.
 - **Twilio** — trial mode only sends to verified numbers. For real US business
   SMS you must complete **A2P 10DLC** brand + campaign registration (allow several
   days). Start this early.
