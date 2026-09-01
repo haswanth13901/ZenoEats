@@ -243,3 +243,25 @@ export async function assignDriver(formData: FormData) {
   assertOk(error, "assign the driver");
   revalidatePath("/admin/orders");
 }
+
+// ---------- Security alerts ----------
+
+/**
+ * Mark a webhook alert as seen. Records who acknowledged it — if a payment
+ * anomaly is ever disputed, "someone clicked it" is not a useful answer.
+ */
+export async function acknowledgeAlert(formData: FormData) {
+  const user = await requireRole("admin");
+  const supabase = await createServerSupabase();
+  const id = z.uuid("Invalid alert id").parse(formData.get("id"));
+
+  const { error } = await supabase
+    .from("security_alerts")
+    .update({ acknowledged_at: new Date().toISOString(), acknowledged_by: user.id })
+    .eq("id", id)
+    .is("acknowledged_at", null);
+
+  assertOk(error, "acknowledge the alert");
+  revalidatePath("/admin/alerts");
+  revalidatePath("/admin");
+}

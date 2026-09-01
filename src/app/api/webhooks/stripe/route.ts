@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { sendTrackingSms } from "@/lib/twilio";
+import { recordSecurityAlert } from "@/lib/alerts";
 import Stripe from "stripe";
 
 type AdminClient = ReturnType<typeof createAdminClient>;
@@ -70,12 +71,19 @@ export async function POST(req: NextRequest) {
   const session = event.data.object as Stripe.Checkout.Session;
   const orderId = session.metadata?.order_id;
 
+  const supabase = createAdminClient();
+
   if (!orderId) {
     console.error(`stripe webhook: event ${event.id} has no order_id metadata`);
+    if (event.type !== "checkout.session.expired") {
+      await recordSecurityAlert(supabase, {
+        kind: "missing_order_metadata",
+        stripeEventId: event.id,
+        detail: { session_id: session.id, amount_total: session.amount_total },
+      });
+    }
     return NextResponse.json({ received: true });
   }
-
-  const supabase = createAdminClient();
 
   if (event.type === "checkout.session.expired") {
     return handleExpired(supabase, orderId, event.id);
@@ -150,8 +158,15 @@ async function handlePaid(
   }
 
   if (!order) {
-    // Retrying will not conjure the order. Stop the retry loop, keep the log.
+    // Retrying will not conjure the order. Stop the retry loop, keep the log,
+    // and put it somewhere an operator will actually see.
     console.error(`stripe webhook: order ${orderId} not found for event ${eventId}`);
+    await recordSecurityAlert(supabase, {
+      kind: "order_not_found",
+      orderId,
+      stripeEventId: eventId,
+      detail: { session_id: session.id, amount_total: session.amount_total },
+    });
     return NextResponse.json({ received: true });
   }
 
@@ -162,6 +177,18 @@ async function handlePaid(
       `stripe webhook: amount mismatch on order ${orderId} ` +
         `(charged ${session.amount_total}, expected ${order.total_cents})`
     );
+    // The order is left unpaid. Raise it where someone will see it: a
+    // mismatch means this session was not created by our checkout route.
+    await recordSecurityAlert(supabase, {
+      kind: "amount_mismatch",
+      orderId,
+      stripeEventId: eventId,
+      detail: {
+        session_id: session.id,
+        charged_cents: session.amount_total,
+        expected_cents: order.total_cents,
+      },
+    });
     return NextResponse.json({ received: true });
   }
 

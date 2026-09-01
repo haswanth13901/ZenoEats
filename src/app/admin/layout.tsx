@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { getStaffUser } from "@/lib/auth";
+import { createServerSupabase } from "@/lib/supabase-server";
 import SignOutButton from "@/components/SignOutButton";
 import NoAccess from "@/components/NoAccess";
 
@@ -35,6 +37,14 @@ export default async function AdminLayout({
     );
   }
 
+  // A payment anomaly should be impossible to miss, so this banner rides on
+  // every admin page rather than living only on a page nobody visits.
+  const supabase = await createServerSupabase();
+  const { count: openAlerts } = await supabase
+    .from("security_alerts")
+    .select("id", { count: "exact", head: true })
+    .is("acknowledged_at", null);
+
   return (
     <div className="min-h-screen bg-neutral-50">
       <header className="flex items-center justify-between border-b border-neutral-200 bg-white px-6 py-4">
@@ -45,6 +55,7 @@ export default async function AdminLayout({
             <a href="/admin/menu" className="hover:text-brand">Menu</a>
             <a href="/admin/places" className="hover:text-brand">Places</a>
             <a href="/admin/orders" className="hover:text-brand">Orders</a>
+            <a href="/admin/alerts" className="hover:text-brand">Alerts</a>
           </nav>
         </div>
         <div className="flex items-center gap-4 text-sm">
@@ -52,6 +63,17 @@ export default async function AdminLayout({
           <SignOutButton />
         </div>
       </header>
+      {openAlerts != null && openAlerts > 0 && (
+        <Link
+          href="/admin/alerts"
+          className="block border-b border-red-200 bg-red-50 px-6 py-3 text-sm text-red-800 transition hover:bg-red-100"
+        >
+          <strong className="font-semibold">
+            {openAlerts} unreviewed payment {openAlerts === 1 ? "alert" : "alerts"}.
+          </strong>{" "}
+          Something didn&apos;t add up during checkout — review before fulfilling.
+        </Link>
+      )}
       <div className="mx-auto max-w-5xl px-6 py-8">{children}</div>
     </div>
   );
