@@ -1,8 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { createServerSupabase } from "@/lib/supabase-server";
 import { requireRole } from "@/lib/auth";
+import { isTerminal, nextStatus } from "@/lib/orders";
+import type { OrderStatus } from "@/types";
 
 /**
  * All actions run as the caller, so RLS applies. `requireAdmin` checks the
@@ -145,4 +148,98 @@ export async function deletePlace(formData: FormData) {
   const { error } = await supabase.from("places").delete().eq("id", id);
   assertOk(error, "delete the place");
   revalidatePath("/admin/places");
+}
+
+// ---------- Orders ----------
+
+const orderIdSchema = z.uuid("Invalid order id");
+
+/**
+ * Move an order one step down the fulfilment pipeline.
+ *
+ * The caller sends the status it *saw*, not the status to apply. The next
+ * status is derived server-side and the update is conditional on the order
+ * still being where the caller thought it was — so two staff clicking at once
+ * advance the order once, not twice.
+ */
+export async function advanceOrder(formData: FormData) {
+  const supabase = await requireAdmin();
+
+  const id = orderIdSchema.parse(formData.get("id"));
+  const from = formData.get("from") as OrderStatus;
+
+  if (isTerminal(from)) throw new Error("That order is already finished");
+
+  const to = nextStatus(from);
+  if (!to) throw new Error("That order cannot be advanced further");
+
+  const { data, error } = await supabase
+    .from("orders")
+    .update({ status: to })
+    .eq("id", id)
+    .eq("status", from)
+    .select("id");
+
+  assertOk(error, "update the order");
+  if (!data || data.length === 0) {
+    throw new Error("That order moved on already — refresh to see its current state");
+  }
+
+  revalidatePath("/admin/orders");
+}
+
+/** Cancel a live order. Terminal orders are left alone. */
+export async function cancelOrder(formData: FormData) {
+  const supabase = await requireAdmin();
+  const id = orderIdSchema.parse(formData.get("id"));
+
+  const { data, error } = await supabase
+    .from("orders")
+    .update({ status: "cancelled" })
+    .eq("id", id)
+    .not("status", "in", "(delivered,cancelled)")
+    .select("id");
+
+  assertOk(error, "cancel the order");
+  if (!data || data.length === 0) {
+    throw new Error("That order is already delivered or cancelled");
+  }
+
+  revalidatePath("/admin/orders");
+}
+
+/**
+ * Assign (or unassign) the driver for an order. The driver_id is what the
+ * RLS policies key off — a driver can only see and update orders where
+ * driver_id = auth.uid() — so this is the act that grants access, not just a
+ * label.
+ */
+export async function assignDriver(formData: FormData) {
+  const supabase = await requireAdmin();
+
+  const id = orderIdSchema.parse(formData.get("id"));
+  const raw = (formData.get("driver_id") as string) || "";
+  const driverId = raw ? z.uuid("Invalid driver id").parse(raw) : null;
+
+  if (driverId) {
+    // Don't hand a delivery to an account that isn't staff.
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("id, role")
+      .eq("id", driverId)
+      .maybeSingle();
+
+    assertOk(profileError, "look up that driver");
+    if (!profile || (profile.role !== "driver" && profile.role !== "admin")) {
+      throw new Error("That account is not a driver");
+    }
+  }
+
+  const { error } = await supabase
+    .from("orders")
+    .update({ driver_id: driverId })
+    .eq("id", id);
+
+  assertOk(error, "assign the driver");
+  revalidatePath("/admin/orders");
 }
