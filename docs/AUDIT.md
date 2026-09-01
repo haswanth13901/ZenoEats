@@ -5,32 +5,47 @@ referenced by later phases and by commit messages.
 
 ## Status
 
-All 15 findings are addressed in code as of `177a4c0`. Note the middle column:
-three of them are SQL and are **not live until `supabase/schema.sql` is re-run
-against the Supabase project**, which cannot be done or verified from this repo.
+All 15 findings are addressed in code as of `177a4c0`, and the SQL half was
+applied to the production project on 2026-09-01 via
+`supabase/migrations/0001_harden_rls.sql` (psql, single transaction, exit 0).
 
 | ID | Fixed in | Live now? |
 |---|---|---|
 | F1 client-side pricing | `d849089` | Yes |
 | F2 webhook replay / amount | `d849089` | Yes (Redis dedupe still to come in Phase 4) |
-| F3 world-readable orders | `4e933c3` | **Needs migration run** |
+| F3 world-readable orders | `4e933c3` | Yes — applied & verified |
 | F4 admin login lockout | `fd6a954` | Yes |
-| F5 anon location writes | `4e933c3` | **Needs migration run** |
+| F5 anon location writes | `4e933c3` | Yes — applied & verified |
 | F6 fake `requireAdmin` | `fd6a954` | Yes |
 | F7 post-payment 404 | `177a4c0` | Yes |
-| F8 mutable `search_path` | `4e933c3` | **Needs migration run** |
+| F8 mutable `search_path` | `4e933c3` | Yes — applied & verified |
 | F9 no input validation | `d849089` | Yes, on `/api/checkout` |
 | F10 ignored insert result | `d849089` | Yes |
 | F11 unguarded `/driver` | `fd6a954` | Yes |
 | F12 unpaid orders in queue | `177a4c0` | Yes |
-| F13 no profile bootstrap | `4e933c3` | **Needs migration run** |
+| F13 no profile bootstrap | `4e933c3` | Yes — applied & verified |
 | F14 middleware on the webhook | `fd6a954` | Yes |
 | F15 raw error logging | `d849089` | Yes |
 
-Verified by type-check, lint and `next build` only. Behavioural proof — that a
-forged price is ignored, that a replayed webhook event is a no-op — arrives
-with the Phase 2 test suite. The SQL changes have no automated verification at
-all; they need a real project to run against.
+Application code is verified by type-check, lint and `next build` only.
+Behavioural proof — that a forged price is ignored, that a replayed webhook
+event is a no-op — arrives with the Phase 2 test suite.
+
+The RLS changes were verified against the live project by re-running the
+attack:
+
+| anon-key request | before | after |
+|---|---|---|
+| `select * from orders` | 5 rows, 5 phone numbers | 0 rows |
+| `select * from order_items` | readable | 0 rows |
+| `select * from driver_locations` | readable | 0 rows |
+| `insert into driver_locations` | permitted (F5) | HTTP 401 |
+| `insert into menu_items` | 401 | 401 |
+| `patch orders set paid` | — | 204, 0 rows changed (verified against the table) |
+
+Public reads that the anonymous ordering flow depends on — `menu_items`,
+`places`, `restaurants` — still return rows. Row counts were unchanged by the
+migration, and one admin profile remains.
 
 The finding text below is left as originally written, describing the code as it
 was at `db95e87`.
