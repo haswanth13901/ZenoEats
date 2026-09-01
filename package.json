@@ -19,7 +19,8 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "stripe": "^17.2.0",
-    "twilio": "^5.3.4"
+    "twilio": "^5.3.4",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^20.16.11",
