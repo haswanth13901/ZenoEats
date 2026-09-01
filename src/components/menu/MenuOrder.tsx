@@ -63,6 +63,10 @@ export default function MenuOrder({
     setCheckingOut(true);
 
     try {
+      // Send what was ordered, not what it costs. The server re-reads every
+      // price from menu_items, so names and prices in this payload would be
+      // ignored anyway (Zod strips them) — not sending them keeps it honest
+      // about where the total comes from.
       const res = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -70,7 +74,10 @@ export default function MenuOrder({
           place_id: place.id,
           restaurant_id: restaurant.id,
           phone: phone.trim(),
-          items: cartList,
+          items: cartList.map((i) => ({
+            menu_item_id: i.menu_item_id,
+            quantity: i.quantity,
+          })),
         }),
       });
       const data = await res.json();
