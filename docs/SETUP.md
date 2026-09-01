@@ -87,7 +87,18 @@ npm run dev
   | `checkout.session.expired` | Cancels the abandoned order (~24h after checkout) |
 
   **Locally you do not need a dashboard endpoint at all.** The Stripe CLI
-  forwards every event type, so none of the above applies until you deploy:
+  forwards every event type, so none of the above applies until you deploy.
+
+  Installing the CLI on Windows — note `scoop install stripe` alone fails with
+  "Couldn't find manifest for 'stripe'", because Stripe publishes its own
+  bucket rather than shipping in scoop's `main`:
+
+  ```powershell
+  scoop bucket add stripe https://github.com/stripe/scoop-stripe-cli.git
+  scoop install stripe
+  ```
+
+  Then:
 
   ```bash
   # No `stripe login` needed — authenticate with the test key directly:
