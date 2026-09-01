@@ -1,7 +1,15 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { CartItem, MenuItem, Place, Restaurant } from "@/types";
+import {
+  addToCart,
+  cartCount,
+  cartTotalCents,
+  removeFromCart,
+  toCheckoutItems,
+  type Cart,
+} from "@/lib/cart";
+import type { MenuItem, Place, Restaurant } from "@/types";
 
 export default function MenuOrder({
   restaurant,
@@ -12,50 +20,28 @@ export default function MenuOrder({
   place: Place;
   items: MenuItem[];
 }) {
-  const [cart, setCart] = useState<Record<string, CartItem>>({});
+  const [cart, setCart] = useState<Cart>({});
   const [phone, setPhone] = useState("");
   const [checkingOut, setCheckingOut] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const cartList = Object.values(cart);
-  const total = useMemo(
-    () => cartList.reduce((s, i) => s + i.price_cents * i.quantity, 0),
-    [cartList]
-  );
-  const count = cartList.reduce((s, i) => s + i.quantity, 0);
+  // Display only. /api/checkout recomputes the total from menu_items, so this
+  // number never decides what anyone is charged.
+  const total = useMemo(() => cartTotalCents(cart), [cart]);
+  const count = useMemo(() => cartCount(cart), [cart]);
+  const isEmpty = count === 0;
 
   function add(item: MenuItem) {
-    setCart((c) => {
-      const existing = c[item.id];
-      return {
-        ...c,
-        [item.id]: existing
-          ? { ...existing, quantity: existing.quantity + 1 }
-          : {
-              menu_item_id: item.id,
-              name: item.name,
-              price_cents: item.price_cents,
-              quantity: 1,
-            },
-      };
-    });
+    setCart((c) => addToCart(c, item));
   }
 
   function remove(itemId: string) {
-    setCart((c) => {
-      const existing = c[itemId];
-      if (!existing) return c;
-      if (existing.quantity <= 1) {
-        const { [itemId]: _, ...rest } = c;
-        return rest;
-      }
-      return { ...c, [itemId]: { ...existing, quantity: existing.quantity - 1 } };
-    });
+    setCart((c) => removeFromCart(c, itemId));
   }
 
   async function checkout() {
     setError(null);
-    if (cartList.length === 0) return;
+    if (isEmpty) return;
     if (!phone.trim()) {
       setError("Add a phone number so we can text you the tracking link.");
       return;
@@ -74,10 +60,7 @@ export default function MenuOrder({
           place_id: place.id,
           restaurant_id: restaurant.id,
           phone: phone.trim(),
-          items: cartList.map((i) => ({
-            menu_item_id: i.menu_item_id,
-            quantity: i.quantity,
-          })),
+          items: toCheckoutItems(cart),
         }),
       });
       const data = await res.json();

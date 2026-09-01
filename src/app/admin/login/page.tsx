@@ -36,15 +36,24 @@ export default function AdminLoginPage() {
       .eq("id", signIn.user.id)
       .maybeSingle();
 
-    if (profile?.role !== "admin") {
-      await supabase.auth.signOut();
-      setError("This account isn't an admin. Ask an owner to grant access.");
-      setLoading(false);
+    // One sign-in page for all staff, routed by role. Drivers used to be
+    // signed straight back out here, which left the driver view unreachable
+    // by the only people it is for.
+    if (profile?.role === "admin") {
+      router.push("/admin");
+      router.refresh();
       return;
     }
 
-    router.push("/admin");
-    router.refresh();
+    if (profile?.role === "driver") {
+      router.push("/driver");
+      router.refresh();
+      return;
+    }
+
+    await supabase.auth.signOut();
+    setError("This account has no staff access yet. Ask an owner to set you up.");
+    setLoading(false);
   }
 
   return (
@@ -59,13 +68,15 @@ export default function AdminLoginPage() {
             Manage your menu, delivery places, and live orders — all in the admin console.
           </p>
         </div>
-        <span className="text-sm text-neutral-500">Owner &amp; staff access only</span>
+        <span className="text-sm text-neutral-500">Staff access only</span>
       </div>
 
       <div className="flex items-center justify-center p-8">
         <div className="w-full max-w-sm">
           <h1 className="text-2xl font-semibold text-neutral-900">Sign in</h1>
-          <p className="mt-1 text-neutral-500">Access the ZenoEats admin console.</p>
+          <p className="mt-1 text-neutral-500">
+            Staff access — admins reach the console, drivers their deliveries.
+          </p>
 
           <form onSubmit={handleLogin} className="mt-8 space-y-4">
             <div>

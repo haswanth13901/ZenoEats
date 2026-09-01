@@ -27,3 +27,9 @@ yarn-debug.log*
 yarn-error.log*
 /coverage
 tsconfig.tsbuildinfo
+
+# testing (playwright artifacts; /coverage is already listed above)
+/test-results
+/playwright-report
+/blob-report
+/playwright/.cache

@@ -10,9 +10,22 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Dummy values so the app can build and boot without real credentials. No test
+# in CI reaches a real service: Stripe, Twilio and Supabase are mocked in the
+# unit and route suites, and the RLS tests skip when .env.local is absent
+# (which it always is here — it is gitignored, and never committed).
+env:
+  NEXT_PUBLIC_APP_URL: http://localhost:3000
+  NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: dummy-anon-key
+  SUPABASE_SERVICE_ROLE_KEY: dummy-service-role-key
+  NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: dummy-maps-key
+  STRIPE_SECRET_KEY: sk_test_dummy
+  STRIPE_WEBHOOK_SECRET: whsec_dummy_for_ci
+
 jobs:
   quality:
-    name: Lint, Type-check & Build
+    name: Lint, Type-check, Test & Build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -33,10 +46,47 @@ jobs:
       - name: Type-check
         run: npm run type-check
 
+      - name: Unit & route tests
+        run: npm test
+
       - name: Build
         run: npm run build
+
+  e2e:
+    name: End-to-end (auth guards)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Build
+        run: npm run build
+
+      - name: Run Playwright
+        # Serve the production build rather than `next dev`: dev compiles each
+        # route on first request, which is slow and flaky under CI timing.
+        # E2E_LIVE_AUTH is deliberately unset, so the role tests skip — they
+        # create real users and need a real Supabase project.
+        run: npx playwright test
         env:
-          # Dummy values so `next build` doesn't fail on missing envs in CI.
-          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: dummy-anon-key
-          NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: dummy-maps-key
+          E2E_COMMAND: npm run start
+
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
