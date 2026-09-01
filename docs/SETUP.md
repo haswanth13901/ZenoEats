@@ -30,8 +30,40 @@ An `on_auth_user_created` trigger already inserts the `profiles` row for every
 new user (defaulting to `driver`), so this is an update, not an insert — an
 insert would conflict on the primary key.
 
-Unless you want self-serve driver signups, turn off public sign-ups in
-**Authentication → Providers → Email**. New accounts land as `driver`.
+### Turn off public sign-ups
+
+By default a Supabase project accepts sign-ups from anyone. Because
+`handle_new_user` gives every new account the `driver` role, that means a
+stranger can create a signed-in account in your app — they see nothing (RLS
+gives a driver with no assigned orders no data at all), but they are past the
+front door, and unconfirmed sign-ups still create `profiles` rows.
+
+Turn it off in **Authentication → Sign In / Providers → Email → "Allow new
+users to sign up"**.
+
+Verify with:
+```bash
+curl -s "$NEXT_PUBLIC_SUPABASE_URL/auth/v1/settings"   -H "apikey: $NEXT_PUBLIC_SUPABASE_ANON_KEY"
+```
+`disable_signup` must be `true`.
+
+### Adding staff once sign-ups are off
+
+Self-registration is gone, so you create staff accounts yourself:
+
+1. **Authentication → Users → Add user** (tick "Auto Confirm User", or they
+   will never be able to sign in without a confirmation email).
+2. The `on_auth_user_created` trigger creates their `profiles` row as a
+   `driver` — which is all a delivery driver needs.
+3. To make someone an admin, promote them:
+   ```sql
+   update profiles set role = 'admin', full_name = 'Their Name'
+   where id = '<auth-user-uuid>';
+   ```
+
+Drivers only see an order once an admin assigns it to them on
+**/admin/orders** — `driver_id` is what the RLS policies key off, so assigning
+is what grants access, not a label.
 
 Start the dev server:
 ```bash
