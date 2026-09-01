@@ -111,11 +111,21 @@ alter table driver_locations enable row level security;
 alter table profiles        enable row level security;
 
 -- Helper: is the current user an admin?
+-- security definer so it can read profiles regardless of the caller's own
+-- policies. search_path is pinned: a definer function with a mutable
+-- search_path can be hijacked by shadowing `profiles` in an earlier schema.
 create or replace function is_admin() returns boolean as $$
   select exists (
     select 1 from profiles where id = auth.uid() and role = 'admin'
   );
-$$ language sql security definer;
+$$ language sql stable security definer set search_path = public, pg_temp;
+
+-- Helper: is the current user the driver assigned to this order?
+create or replace function is_order_driver(target_order uuid) returns boolean as $$
+  select exists (
+    select 1 from orders o where o.id = target_order and o.driver_id = auth.uid()
+  );
+$$ language sql stable security definer set search_path = public, pg_temp;
 
 -- Public read: menu, restaurants, places (customers aren't logged in).
 drop policy if exists "public read restaurants" on restaurants;
@@ -137,36 +147,95 @@ create policy "admin manage places" on places for all using (is_admin()) with ch
 drop policy if exists "admin manage menu" on menu_items;
 create policy "admin manage menu" on menu_items for all using (is_admin()) with check (is_admin());
 
--- Orders: customers can read a single order by id (tracking page uses anon key
--- + the order UUID as an unguessable token). Admins & assigned drivers manage.
+-- Orders.
+--
+-- There is deliberately NO public select policy. The previous
+-- `using (true)` was justified as "the order UUID is an unguessable token",
+-- but RLS filters rows, not query shape: with the anon key (which ships to
+-- every browser) `select * from orders` returned the whole table, customer
+-- phone numbers included. A row-level policy cannot express "only if you
+-- already know the id".
+--
+-- The customer tracking page therefore reads a single order server-side with
+-- the service-role key, keyed by the UUID in the URL. If anon Realtime on
+-- orders is needed later, add a per-order signed token or a security-definer
+-- RPC that takes the order id — do not restore a blanket select policy.
 drop policy if exists "read orders" on orders;
-create policy "read orders" on orders for select using (true);
 
 drop policy if exists "admin manage orders" on orders;
-create policy "admin manage orders" on orders for all using (is_admin()) with check (is_admin());
+create policy "admin manage orders" on orders for all
+  to authenticated using (is_admin()) with check (is_admin());
+
+drop policy if exists "driver read assigned orders" on orders;
+create policy "driver read assigned orders" on orders for select
+  to authenticated using (driver_id = auth.uid());
 
 drop policy if exists "driver update assigned orders" on orders;
 create policy "driver update assigned orders" on orders for update
-  using (driver_id = auth.uid()) with check (driver_id = auth.uid());
+  to authenticated using (driver_id = auth.uid()) with check (driver_id = auth.uid());
 
+-- Order items follow their order: no public read, same reasoning as above.
 drop policy if exists "read order items" on order_items;
-create policy "read order items" on order_items for select using (true);
 
--- Driver locations: public read (tracking page), driver/admin write.
+drop policy if exists "admin read order items" on order_items;
+create policy "admin read order items" on order_items for select
+  to authenticated using (is_admin() or is_order_driver(order_id));
+
+-- Driver locations. Public read is gone for the same reason: it exposed live
+-- courier positions for every active order. The tracking page reads these
+-- server-side alongside the order.
 drop policy if exists "read driver locations" on driver_locations;
-create policy "read driver locations" on driver_locations for select using (true);
 
+drop policy if exists "staff read driver locations" on driver_locations;
+create policy "staff read driver locations" on driver_locations for select
+  to authenticated using (is_admin() or is_order_driver(order_id));
+
+-- `with check (true)` on the old policy let ANYONE insert a location for any
+-- order: INSERT consults only WITH CHECK, never USING, so the guard did not
+-- apply to the one command that mattered. Both clauses are constrained now.
 drop policy if exists "driver write locations" on driver_locations;
 create policy "driver write locations" on driver_locations for all
-  using (is_admin() or exists (
-    select 1 from orders o where o.id = order_id and o.driver_id = auth.uid()
-  )) with check (true);
+  to authenticated
+  using (is_admin() or is_order_driver(order_id))
+  with check (is_admin() or is_order_driver(order_id));
 
 drop policy if exists "read own profile" on profiles;
-create policy "read own profile" on profiles for select using (id = auth.uid() or is_admin());
+create policy "read own profile" on profiles for select
+  to authenticated using (id = auth.uid() or is_admin());
+
+drop policy if exists "admin manage profiles" on profiles;
+create policy "admin manage profiles" on profiles for all
+  to authenticated using (is_admin()) with check (is_admin());
+
+-- ---------- Profile bootstrap ----------
+-- Without this, a newly created auth user has no profiles row, so `role` is
+-- null and they can never be granted access without a manual INSERT. New
+-- users land as 'driver' (the column default); promoting to admin stays a
+-- deliberate act. Public signups should be disabled in Supabase Auth unless
+-- you actually want self-serve driver accounts.
+create or replace function handle_new_user() returns trigger as $$
+begin
+  insert into public.profiles (id, full_name)
+  values (new.id, new.raw_user_meta_data->>'full_name')
+  on conflict (id) do nothing;
+  return new;
+end;
+$$ language plpgsql security definer set search_path = public, pg_temp;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created after insert on auth.users
+  for each row execute function handle_new_user();
 
 -- ============================================================
 -- Realtime: broadcast changes on these tables
 -- ============================================================
-alter publication supabase_realtime add table orders;
-alter publication supabase_realtime add table driver_locations;
+-- Realtime still respects RLS, so these now reach admins and the assigned
+-- driver only. Anonymous customers get their updates from the server-rendered
+-- tracking page rather than a direct subscription.
+do $$ begin
+  alter publication supabase_realtime add table orders;
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  alter publication supabase_realtime add table driver_locations;
+exception when duplicate_object then null; end $$;
